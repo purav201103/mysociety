@@ -1,5 +1,6 @@
 // lib/services/amenity_service.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:mysociety/core/models/booking_model.dart';
 
 class AmenityService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -55,17 +56,6 @@ class AmenityService {
         .collection('bookings')
         .orderBy('createdAt', descending: true)
         .snapshots();
-  }
-
-// Update the status of a booking
-  Future<void> updateBookingStatus({
-    required String bookingId,
-    required String newStatus, // e.g., "Approved" or "Rejected"
-  }) async {
-    await _firestore
-        .collection('bookings')
-        .doc(bookingId)
-        .update({'status': newStatus});
   }
 
   // In lib/services/amenity_service.dart
@@ -168,6 +158,91 @@ class AmenityService {
     }
 
     await batch.commit();
+  }
+
+  Future<void> cancelBooking(String bookingId) async {
+    try {
+      await _firestore.collection('bookings').doc(bookingId).delete();
+    } catch (e) {
+      // It's good practice to handle potential errors
+      print("Error cancelling booking: $e");
+      throw Exception('Could not cancel the booking. Please try again later.');
+    }
+  }
+
+  // Fetches start times for all approved/pending bookings for a specific amenity on a given day
+  Stream<List<Timestamp>> getBookedSlotsForDay(String amenityId, DateTime day) {
+    // Set start of the day
+    final startOfDay = Timestamp.fromDate(DateTime(day.year, day.month, day.day));
+    // Set end of the day
+    final endOfDay = Timestamp.fromDate(DateTime(day.year, day.month, day.day, 23, 59, 59));
+
+    return _firestore
+        .collection('bookings')
+        .where('amenityId', isEqualTo: amenityId)
+        .where('startTime', isGreaterThanOrEqualTo: startOfDay)
+        .where('startTime', isLessThanOrEqualTo: endOfDay)
+        .snapshots()
+        .map((snapshot) {
+      return snapshot.docs.map((doc) {
+        return doc.data()['startTime'] as Timestamp;
+      }).toList();
+    });
+  }
+
+  Future<bool> isSlotAvailable({
+    required String amenityId,
+    required DateTime newStartTime,
+    required DateTime newEndTime,
+  }) async {
+    // 1. Fetch all bookings for the amenity on the selected day
+    final startOfDay = DateTime(newStartTime.year, newStartTime.month, newStartTime.day);
+    final endOfDay = startOfDay.add(const Duration(days: 1));
+
+    final querySnapshot = await _firestore
+        .collection('bookings')
+        .where('amenityId', isEqualTo: amenityId)
+        .where('startTime', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
+        .where('startTime', isLessThan: Timestamp.fromDate(endOfDay))
+        .get();
+
+    if (querySnapshot.docs.isEmpty) {
+      // No bookings on this day, so the slot is definitely available
+      return true;
+    }
+
+    // 2. Check for overlaps in the app
+    for (final doc in querySnapshot.docs) {
+      final existingBooking = Booking.fromFirestore(doc); // Using our model
+      final existingStartTime = existingBooking.startTime.toDate();
+      final existingEndTime = existingBooking.endTime.toDate();
+
+      // The logic to check for an overlap is:
+      // (NewStart < ExistingEnd) and (ExistingStart < NewEnd)
+      if (newStartTime.isBefore(existingEndTime) && existingStartTime.isBefore(newEndTime)) {
+        // A clash was found!
+        return false;
+      }
+    }
+
+    // No clashes found after checking all existing bookings
+    return true;
+  }
+
+  Stream<QuerySnapshot> getBookingsByStatus(String status) {
+    return _firestore
+        .collection('bookings')
+        .where('status', isEqualTo: status)
+        .orderBy('startTime', descending: true) // Show most recent first
+        .snapshots();
+  }
+
+  // --- NEW METHOD 2: Update the status of a booking ---
+  Future<void> updateBookingStatus(String bookingId, String newStatus) async {
+    await _firestore
+        .collection('bookings')
+        .doc(bookingId)
+        .update({'status': newStatus});
   }
 
 }

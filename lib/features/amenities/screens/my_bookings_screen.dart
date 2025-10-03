@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:mysociety/core/models/booking_model.dart';
 import 'package:mysociety/services/amenity_service.dart';
 
 class MyBookingsScreen extends StatelessWidget {
@@ -11,13 +12,52 @@ class MyBookingsScreen extends StatelessWidget {
   Color _getStatusColor(String status) {
     switch (status) {
       case 'Approved':
-        return Colors.green;
+        return Colors.green.shade700;
       case 'Rejected':
-        return Colors.red;
+        return Colors.red.shade700;
       case 'Pending':
-        return Colors.orange;
+        return Colors.orange.shade600;
       default:
         return Colors.grey;
+    }
+  }
+
+  // Method to handle the cancellation
+  void _cancelBooking(BuildContext context, Booking booking) async {
+    // Show a confirmation dialog
+    final bool? confirm = await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Confirm Cancellation'),
+        content: const Text('Are you sure you want to cancel this booking?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('No'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Yes, Cancel'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      try {
+        await AmenityService().cancelBooking(booking.id);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('Booking successfully cancelled.'),
+              backgroundColor: Colors.green),
+        );
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+              content: Text('Failed to cancel booking: ${e.toString()}'),
+              backgroundColor: Colors.red),
+        );
+      }
     }
   }
 
@@ -37,52 +77,60 @@ class MyBookingsScreen extends StatelessWidget {
             return const Center(child: CircularProgressIndicator());
           }
           if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-            return const Center(child: Text('You have not made any bookings yet.'));
+            return const Center(
+                child: Text('You have not made any bookings yet.'));
           }
 
-          final bookings = snapshot.data!.docs;
+          final bookings = snapshot.data!.docs
+              .map((doc) => Booking.fromFirestore(doc))
+              .toList();
 
           return ListView.builder(
             padding: const EdgeInsets.all(8.0),
             itemCount: bookings.length,
             itemBuilder: (context, index) {
-              final data = bookings[index].data() as Map<String, dynamic>;
+              final booking = bookings[index];
+              final startTime = booking.startTime.toDate();
+              final endTime = booking.endTime.toDate();
 
-              // --- START OF FIX ---
-              // Safely handle potentially null timestamps
-              final Timestamp? startTimeStamp = data['startTime'];
-              final Timestamp? endTimeStamp = data['endTime'];
+              final dateText = DateFormat('EEEE, d MMMM yyyy').format(startTime);
+              final timeText =
+                  '${DateFormat('h:mm a').format(startTime)} - ${DateFormat('h:mm a').format(endTime)}';
 
-              String dateText;
-              String timeText;
-
-              if (startTimeStamp != null) {
-                final startTime = startTimeStamp.toDate();
-                dateText = DateFormat('d MMM, yyyy').format(startTime);
-
-                if (endTimeStamp != null) {
-                  final endTime = endTimeStamp.toDate();
-                  timeText = '${DateFormat('h:mm a').format(startTime)} - ${DateFormat('h:mm a').format(endTime)}';
-                } else {
-                  timeText = DateFormat('h:mm a').format(startTime);
-                }
-              } else {
-                // Fallback if data is old/missing
-                dateText = 'Date not specified';
-                timeText = 'Time not specified';
-              }
-              // --- END OF FIX ---
+              // Only show cancel button if the booking is 'Pending'
+              final bool canCancel = booking.status == 'Pending';
 
               return Card(
-                margin: const EdgeInsets.symmetric(vertical: 6.0),
-                child: ListTile(
-                  title: Text(data['amenityName'] ?? 'Unknown Amenity', style: const TextStyle(fontWeight: FontWeight.bold)),
-                  subtitle: Text('$dateText\n$timeText'),
-                  trailing: Chip(
-                    label: Text(data['status'] ?? 'Unknown', style: const TextStyle(color: Colors.white)),
-                    backgroundColor: _getStatusColor(data['status'] ?? 'Unknown'),
+                elevation: 3,
+                margin: const EdgeInsets.symmetric(vertical: 8.0),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8.0),
+                  child: ListTile(
+                    isThreeLine: true,
+                    title: Text(booking.amenityName,
+                        style: const TextStyle(fontWeight: FontWeight.bold)),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('$dateText\n$timeText'),
+                        const SizedBox(height: 8),
+                        if (canCancel)
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: TextButton(
+                              onPressed: () => _cancelBooking(context, booking),
+                              child: const Text('Cancel Booking', style: TextStyle(color: Colors.red)),
+                            ),
+                          )
+                      ],
+                    ),
+                    trailing: Chip(
+                      label: Text(booking.status,
+                          style: const TextStyle(
+                              color: Colors.white, fontWeight: FontWeight.bold)),
+                      backgroundColor: _getStatusColor(booking.status),
+                    ),
                   ),
-                  isThreeLine: true,
                 ),
               );
             },
